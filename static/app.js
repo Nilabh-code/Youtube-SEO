@@ -13,8 +13,15 @@ const panelsEl = $("#panels");
 const errorBox = $("#errorBox");
 const errorMessage = $("#errorMessage");
 const toastEl = $("#toast");
+const manualPanel = $("#manualPanel");
+const manualTitle = $("#manualTitle");
+const manualReason = $("#manualReason");
+const manualForm = $("#manualForm");
+const transcriptInput = $("#transcriptInput");
+const manualCount = $("#manualCount");
+const manualGenBtn = $("#manualGenBtn");
 
-const state = { data: null, active: 0, stepTimer: null, toastTimer: null };
+const state = { data: null, active: 0, stepTimer: null, toastTimer: null, pendingUrl: "" };
 
 /* ---------------- boot ---------------- */
 checkHealth();
@@ -46,41 +53,111 @@ form.addEventListener("submit", async (event) => {
 
   hide(errorBox);
   hide(results);
+  hide(manualPanel);
   setBusy(true);
   startLoader();
 
   try {
-    const res = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, variations: Number(varCount.value) }),
+    const data = await requestGenerate("/api/generate", {
+      url,
+      variations: Number(varCount.value),
     });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      throw new Error(data.error || "Request failed. Try again.");
-    }
-
-    finishLoader();
-    state.data = data;
-    state.active = 0;
-    render(data);
-    setTimeout(() => hide(loader), 650);
-    results.scrollIntoView({ behavior: "smooth", block: "start" });
+    finishGenerate(data);
   } catch (err) {
     stopLoader();
-    showError(err.message || "Unexpected error. Try again.");
+    if (err.kind === "blocked" || err.kind === "fetch_failed" || err.kind === "no_captions") {
+      showManual(err, url);
+    } else {
+      showError(err.message || "Unexpected error. Try again.");
+    }
   } finally {
     setBusy(false);
   }
 });
+
+async function requestGenerate(endpoint, payload) {
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || "Request failed. Try again.");
+    err.kind = data.kind || "error";
+    throw err;
+  }
+  return data;
+}
+
+function finishGenerate(data) {
+  finishLoader();
+  state.data = data;
+  state.active = 0;
+  render(data);
+  setTimeout(() => hide(loader), 650);
+  results.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function showManual(err, url) {
+  state.pendingUrl = url;
+  manualTitle.textContent =
+    err.kind === "no_captions"
+      ? "No captions found automatically"
+      : "YouTube blocked the automatic read";
+  manualReason.textContent =
+    err.kind === "no_captions"
+      ? `${err.message} If you have the subtitles or script, paste them below and generation will continue as normal.`
+      : `${err.message} Paste the transcript below and you will get the same titles, description and tags.`;
+  show(manualPanel);
+  manualPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+manualForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const transcript = transcriptInput.value.trim();
+  if (transcript.length < 50) {
+    toast("Paste a bit more text — at least a few sentences");
+    transcriptInput.focus();
+    return;
+  }
+
+  hide(errorBox);
+  hide(results);
+  setManualBusy(true);
+  startLoader();
+
+  try {
+    const data = await requestGenerate("/api/generate-from-text", {
+      transcript,
+      url: state.pendingUrl,
+      variations: Number(varCount.value),
+    });
+    hide(manualPanel);
+    finishGenerate(data);
+  } catch (err) {
+    stopLoader();
+    showError(err.message || "Unexpected error. Try again.");
+  } finally {
+    setManualBusy(false);
+  }
+});
+
+transcriptInput.addEventListener("input", () => {
+  manualCount.textContent = `${transcriptInput.value.length.toLocaleString()} characters`;
+});
+
+function setManualBusy(busy) {
+  manualGenBtn.disabled = busy;
+  manualGenBtn.classList.toggle("loading", busy);
+}
 
 $("#clearBtn").addEventListener("click", () => {
   urlInput.value = "";
   urlInput.focus();
   hide(errorBox);
   hide(results);
+  hide(manualPanel);
   stopLoader();
   hide(loader);
 });

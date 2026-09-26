@@ -590,6 +590,64 @@ body {
 }
 .transcript-actions { padding: 12px 0 14px; }
 
+/* ---------- manual transcript fallback ---------- */
+.manual-panel { margin-top: 20px; padding: clamp(16px, 3.5vw, 22px); }
+.manual-panel h2 {
+  font-family: var(--display);
+  font-size: clamp(1.1rem, 3vw, 1.35rem);
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+}
+.manual-reason { color: var(--muted); font-size: 0.9rem; margin: 0 0 14px; }
+.guide {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.32);
+  display: grid;
+  gap: 8px;
+  font-size: 0.88rem;
+  color: #d5d8e4;
+}
+.guide strong { color: #fff; }
+#transcriptInput {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  padding: 12px 14px;
+  outline: none;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+#transcriptInput::placeholder { color: var(--muted-2); }
+#transcriptInput:focus {
+  border-color: rgba(139, 92, 246, 0.6);
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15);
+}
+.manual-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* ---------- footer / toast ---------- */
 .footer {
   text-align: center;
@@ -620,6 +678,7 @@ body {
   .form-actions { flex-direction: column; align-items: stretch; }
   .field { justify-content: space-between; }
   .primary-btn { width: 100%; min-width: 0; }
+  .manual-foot { flex-direction: column; align-items: stretch; }
   .results-head { flex-direction: column; align-items: stretch; }
   .head-actions { width: 100%; }
   .head-actions .ghost-btn { flex: 1; padding: 11px 10px; }

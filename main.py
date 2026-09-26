@@ -23,8 +23,16 @@ class GenerateRequest(BaseModel):
     variations: int = Field(default=3, ge=1, le=5)
 
 
-def _error(status_code: int, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"error": message})
+class GenerateFromTextRequest(BaseModel):
+    transcript: str = Field(..., min_length=50, max_length=120000)
+    url: str = Field(default="", max_length=400)
+    variations: int = Field(default=3, ge=1, le=5)
+
+
+def _error(status_code: int, message: str, kind: str = "error") -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code, content={"error": message, "kind": kind}
+    )
 
 
 @app.get("/api/health")
@@ -57,7 +65,7 @@ def generate(request: GenerateRequest):
     try:
         transcript = fetch_transcript(video_id)
     except TranscriptError as exc:
-        return _error(422, str(exc))
+        return _error(422, str(exc), kind=exc.kind)
     except Exception:
         return _error(500, "Something went wrong while reading the transcript.")
 
@@ -79,6 +87,42 @@ def generate(request: GenerateRequest):
         "language": transcript.language,
         "source": transcript.source,
         "transcript": transcript.text,
+        "variations": metadata["variations"],
+        "model": _config_or_none()[1],
+    }
+
+
+@app.post("/api/generate-from-text")
+def generate_from_text(request: GenerateFromTextRequest):
+    """Manual fallback: the user pastes a transcript they copied from YouTube."""
+    video_id = extract_video_id(request.url) if request.url else None
+    source_url = (
+        f"https://www.youtube.com/watch?v={video_id}" if video_id else "pasted transcript"
+    )
+
+    if _config_or_none()[0] is None:
+        return _error(
+            500,
+            "The server is missing GROQ_API_KEY. Set it in the environment "
+            "variables and restart the service.",
+        )
+
+    try:
+        metadata = generate_metadata(
+            request.transcript, source_url, variations=request.variations
+        )
+    except GroqError as exc:
+        return _error(502, str(exc))
+    except Exception:
+        return _error(500, "Something went wrong while generating the metadata.")
+
+    return {
+        "video_id": video_id,
+        "video_url": source_url if video_id else "",
+        "embed_url": f"https://www.youtube.com/embed/{video_id}" if video_id else "",
+        "language": "pasted",
+        "source": "manual paste",
+        "transcript": request.transcript,
         "variations": metadata["variations"],
         "model": _config_or_none()[1],
     }

@@ -11,6 +11,8 @@ Built with **FastAPI + vanilla HTML/CSS/JS**, deployed on **Render**.
 
 - Works with `youtube.com/watch`, `youtu.be`, `/shorts/`, `/embed/`, `/live/` and raw video IDs
 - Transcript auto-detect (English first, then whatever captions exist) with a watch-page fallback
+- Built-in manual transcript paste: if YouTube blocks the server IP, the site guides you to paste the transcript and still generates everything
+- Optional `TRANSCRIPT_PROXY` env var for hosts whose IP YouTube blocks
 - 2–5 metadata variations, each from a different angle (SEO / curiosity / community)
 - Copy buttons everywhere, **Copy all** and **Download .txt**
 - Tag chips + total tag character counter (YouTube's 500 char limit)
@@ -70,6 +72,7 @@ Open <http://127.0.0.1:8000>.
    | --- | --- |
    | `GROQ_API_KEY` | `gsk_...` |
    | `GROQ_MODEL` | `llama-3.3-70b-versatile` (optional) |
+   | `TRANSCRIPT_PROXY` | `http://user:pass@host:port` (optional, only if YouTube blocks the server IP) |
 
 5. Deploy. Your site is live at `https://youtube-assistant.onrender.com`.
 
@@ -102,6 +105,29 @@ Success:
 
 Errors return `{ "error": "human readable message" }` with a 4xx/5xx status.
 
+### `POST /api/generate-from-text`
+
+Manual-transcript fallback: the user pastes a transcript they copied from YouTube.
+
+```json
+{
+  "transcript": "full transcript text, at least a few sentences",
+  "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+  "variations": 3
+}
+```
+
+`url` is optional and only used for labelling. Same success shape as `/api/generate`
+(`source` is `"manual paste"`).
+
+Errors from `/api/generate` include a machine readable `kind`:
+
+| kind | meaning |
+| --- | --- |
+| `blocked` | YouTube blocked this server's IP — retry later or paste manually |
+| `no_captions` | the video has no captions |
+| `unavailable` | private / deleted / region locked / age restricted / bad id |
+
 ### `GET /api/health`
 
 ```json
@@ -131,5 +157,6 @@ Errors return `{ "error": "human readable message" }` with a 4xx/5xx status.
 | "The server is missing GROQ_API_KEY" | Add the key in Render → Environment, then redeploy. |
 | "Groq rejected the API key" | Regenerate the key in the Groq console. |
 | "Model ... is not available" | Set `GROQ_MODEL` to a model you have access to, e.g. `llama-3.1-8b-instant`. |
-| "YouTube is rate limiting this server" | Wait ~10s and retry; cloud IPs get throttled occasionally. |
-| "Captions are turned off for this video" | That video has no transcript — try another. |
+| "YouTube is rate limiting this server" | Wait ~1 min and retry, or paste the transcript manually when the site offers it. |
+| "Captions are turned off for this video" | That video has no transcript — try another, or paste subtitles if you have them. |
+| "No captions found automatically" panel | Copy the transcript from YouTube (video → `···` → **Open transcript**), paste it in the box, hit generate. Same results, no extra setup. |

@@ -67,7 +67,7 @@ def generate_metadata(
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT.format(n=variations)},
+            {"role": "system", "content": SYSTEM_PROMPT.replace("{n}", str(variations))},
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.85,
