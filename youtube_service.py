@@ -52,7 +52,11 @@ MOBILE_UA = (
 
 CONSENT_COOKIES = {"CONSENT": "YES+cb", "SOCS": "CAI"}
 PROMPT_CHAR_LIMIT = 12000
-WATCH_RETRIES = 3
+WATCH_RETRIES = 2
+
+SUPADATA_URL = "https://api.supadata.ai/v1/transcript"
+SUPADATA_JOB_POLLS = 6
+SUPADATA_POLL_WAIT = 5
 
 
 class TranscriptError(Exception):
@@ -120,21 +124,28 @@ def extract_video_id(raw: str) -> str | None:
 
 
 def fetch_transcript(video_id: str) -> Transcript:
-    """Return the transcript, chaining the library, retries and a scrape fallback."""
+    """Return the transcript, chaining free sources until one works.
+
+    Order: direct library -> Supadata API (only if a key is configured) ->
+    watch page scrape. Retries only happen for blocking style failures;
+    missing captions will not appear by retrying.
+    """
     attempts: list[TranscriptError] = []
 
-    try:
-        return _from_library(video_id)
-    except TranscriptError as exc:
-        attempts.append(exc)
-
-    # Only retry the network scrape when the failure was blocking related.
-    # Missing captions will not appear by retrying.
-    if attempts and attempts[-1].kind in ("blocked", "fetch_failed"):
+    for step in (_from_library, _from_supadata, _from_watch_page):
         try:
-            return _from_watch_page(video_id)
+            transcript = step(video_id)
         except TranscriptError as exc:
             attempts.append(exc)
+            if exc.kind in ("no_captions", "unavailable"):
+                break
+            continue
+        if transcript and transcript.text.strip():
+            return transcript
+        attempts.append(
+            TranscriptError("The transcript for this video came back empty.", "no_captions")
+        )
+        break
 
     raise _pick_error(attempts)
 
@@ -231,6 +242,117 @@ def _from_library(video_id: str) -> Transcript:
     return Transcript(_flatten(rows), any_transcript.language_code, "youtube")
 
 
+def _from_supadata(video_id: str) -> Transcript:
+    """Supadata transcript API (free plan). Only runs when SUPADATA_API_KEY is set."""
+    api_key = os.getenv("SUPADATA_API_KEY", "").strip()
+    if not api_key:
+        raise TranscriptError("Supadata API key not configured.", "fetch_failed")
+
+    headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    params = {
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "lang": "en",
+        "text": "true",
+        "mode": "native",
+    }
+    try:
+        response = requests.get(SUPADATA_URL, headers=headers, params=params, timeout=30)
+    except requests.RequestException as exc:
+        raise TranscriptError(
+            "Could not reach the Supadata API.", "fetch_failed"
+        ) from exc
+
+    if response.status_code in (401, 403):
+        raise TranscriptError(
+            "Supadata rejected the API key. Check SUPADATA_API_KEY.", "fetch_failed"
+        )
+    if response.status_code in (402, 429):
+        raise TranscriptError(
+            "Supadata quota is exhausted right now. Try again later.", "fetch_failed"
+        )
+    if response.status_code == 202:
+        return _poll_supadata_job(response, headers)
+    if response.status_code in (206, 404):
+        raise TranscriptError(
+            "This video has no captions available.", "no_captions"
+        )
+    if response.status_code >= 400:
+        raise TranscriptError(
+            f"Supadata returned an error ({response.status_code}).", "fetch_failed"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise TranscriptError("Supadata returned an unreadable response.", "fetch_failed") from exc
+    return _supadata_transcript(payload)
+
+
+def _poll_supadata_job(response: requests.Response, headers: dict) -> Transcript:
+    try:
+        job_id = response.json().get("jobId")
+    except ValueError:
+        job_id = None
+    if not job_id:
+        raise TranscriptError("Supadata did not return a transcript.", "fetch_failed")
+
+    last_error: TranscriptError | None = None
+    for _ in range(SUPADATA_JOB_POLLS):
+        time.sleep(SUPADATA_POLL_WAIT)
+        try:
+            poll = requests.get(
+                f"{SUPADATA_URL}/{job_id}", headers=headers, timeout=30
+            )
+        except requests.RequestException as exc:
+            last_error = TranscriptError(
+                "Could not reach the Supadata API.", "fetch_failed"
+            )
+            continue
+        if poll.status_code != 200:
+            last_error = TranscriptError(
+                "Supadata is still working on that transcript. Try again shortly.",
+                "fetch_failed",
+            )
+            continue
+        try:
+            payload = poll.json()
+        except ValueError:
+            last_error = TranscriptError(
+                "Supadata returned an unreadable response.", "fetch_failed"
+            )
+            continue
+        if payload.get("status") == "completed":
+            return _supadata_transcript(payload)
+        if payload.get("status") == "failed":
+            raise TranscriptError(
+                "Supadata could not read that video.", "fetch_failed"
+            )
+        last_error = TranscriptError(
+            "Supadata is still working on that transcript. Try again shortly.",
+            "fetch_failed",
+        )
+    raise last_error or TranscriptError(
+        "Supadata took too long. Try again shortly.", "fetch_failed"
+    )
+
+
+def _supadata_transcript(payload: dict) -> Transcript:
+    content = payload.get("content")
+    if isinstance(content, list):
+        text = " ".join(
+            str(chunk.get("text", "")).strip()
+            for chunk in content
+            if isinstance(chunk, dict) and chunk.get("text")
+        )
+    else:
+        text = str(content or "").strip()
+    if not text:
+        raise TranscriptError(
+            "The transcript for this video came back empty.", "no_captions"
+        )
+    return Transcript(text, str(payload.get("lang") or "unknown"), "supadata")
+
+
 def _from_watch_page(video_id: str) -> Transcript:
     """Fallback: scrape captionTracks from the watch page (helps when the API is throttled)."""
     last_error: TranscriptError | None = None
@@ -315,23 +437,32 @@ def _scrape_watch_page(video_id: str, user_agent: str) -> Transcript:
     base_url = track.get("baseUrl")
     if not base_url:
         raise TranscriptError("This video has no captions available.", "no_captions")
+    if "&exp=xpe" in base_url:
+        raise TranscriptError(
+            "YouTube is demanding extra verification from this server "
+            "(common on cloud hosting IPs). Wait a bit and retry, "
+            "or paste the transcript manually below.",
+            "blocked",
+        )
 
-    sep = "&" if "?" in base_url else "?"
+    # Fetch the track URL exactly as YouTube serves it (srv3 XML) and parse it.
+    # Appending another fmt parameter makes YouTube return an empty response.
+    track_url = base_url.replace("&fmt=srv3", "")
     try:
         caption_response = requests.get(
-            base_url + sep + "fmt=json3",
+            track_url,
             headers=headers,
             cookies=CONSENT_COOKIES,
             timeout=25,
         )
         caption_response.raise_for_status()
-        payload = caption_response.json()
-    except (requests.RequestException, json.JSONDecodeError) as exc:
+        body = caption_response.text
+    except requests.RequestException as exc:
         raise TranscriptError(
             "Could not download the captions from YouTube.", "blocked"
         ) from exc
 
-    text = _flatten_json3(payload)
+    text = _flatten_xml(body)
     if not text.strip():
         raise TranscriptError(
             "The transcript for this video came back empty.", "no_captions"
@@ -356,13 +487,18 @@ def _flatten(rows) -> str:
     return _join(pieces)
 
 
-def _flatten_json3(payload: dict) -> str:
+def _flatten_xml(body: str) -> str:
+    import html as html_module
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError:
+        return ""
     pieces = []
-    for event in payload.get("events", []):
-        segments = event.get("segs") or []
-        chunk = "".join(seg.get("utf8", "") for seg in segments)
-        if chunk:
-            pieces.append(chunk.strip())
+    for node in root.iter("text"):
+        if node.text:
+            pieces.append(html_module.unescape(node.text).strip())
     return _join(pieces)
 
 

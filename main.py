@@ -42,6 +42,7 @@ def health():
         "status": "ok",
         "groq_key_configured": key is not None,
         "model": model,
+        "supadata_configured": bool(os.getenv("SUPADATA_API_KEY", "").strip()),
     }
 
 

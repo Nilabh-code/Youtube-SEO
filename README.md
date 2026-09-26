@@ -11,6 +11,7 @@ Built with **FastAPI + vanilla HTML/CSS/JS**, deployed on **Render**.
 
 - Works with `youtube.com/watch`, `youtu.be`, `/shorts/`, `/embed/`, `/live/` and raw video IDs
 - Transcript auto-detect (English first, then whatever captions exist) with a watch-page fallback
+- Optional free Supadata key: server fetches transcripts itself on hosts YouTube blocks, keeping the site paste-URL-only
 - Built-in manual transcript paste: if YouTube blocks the server IP, the site guides you to paste the transcript and still generates everything
 - Optional `TRANSCRIPT_PROXY` env var for hosts whose IP YouTube blocks
 - 2–5 metadata variations, each from a different angle (SEO / curiosity / community)
@@ -28,6 +29,21 @@ Built with **FastAPI + vanilla HTML/CSS/JS**, deployed on **Render**.
 2. **API Keys → Create API Key**, copy it (`gsk_...`).
 3. The default model is `llama-3.3-70b-versatile`. To use another one, set
    `GROQ_MODEL` (for example `llama-3.1-8b-instant`).
+
+## 1b. Get a free Supadata API key (URL-only transcripts on Render)
+
+YouTube blocks transcript requests coming from cloud servers like Render, so
+without this step visitors must paste the transcript manually when blocked.
+A free Supadata key fixes that — the server fetches the transcript itself and
+the site stays paste-URL-only:
+
+1. Sign up at <https://supadata.ai> (free plan, no card required).
+2. Open the dashboard and copy your API key (`dash.supadata.ai/organizations/api-key`).
+3. Add it as `SUPADATA_API_KEY` in Render → your service → **Environment**
+   (mark it secret), then redeploy. Locally, put it in `.env`.
+
+Without the key the app still works: it tries YouTube directly and falls back
+to the built-in paste-transcript panel.
 
 ## 2. Run locally
 
@@ -72,6 +88,7 @@ Open <http://127.0.0.1:8000>.
    | --- | --- |
    | `GROQ_API_KEY` | `gsk_...` |
    | `GROQ_MODEL` | `llama-3.3-70b-versatile` (optional) |
+   | `SUPADATA_API_KEY` | free key from supadata.ai — enables automatic transcripts on Render |
    | `TRANSCRIPT_PROXY` | `http://user:pass@host:port` (optional, only if YouTube blocks the server IP) |
 
 5. Deploy. Your site is live at `https://youtube-assistant.onrender.com`.
@@ -140,7 +157,7 @@ Errors from `/api/generate` include a machine readable `kind`:
 
 ```
 ├── main.py             FastAPI app + API routes
-├── youtube_service.py  URL parsing + transcript fetching (library + watch-page fallback)
+├── youtube_service.py  URL parsing + transcript chain (library -> Supadata -> watch page)
 ├── groq_service.py     Groq chat completion → strict JSON metadata
 ├── requirements.txt
 ├── render.yaml         Render build/start/health-check config
