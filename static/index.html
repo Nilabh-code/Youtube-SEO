@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>YouTube Assistant — Titles, Descriptions &amp; Tags from any video</title>
+  <meta name="description" content="Paste a YouTube video or Short link and get a new title, description and tags generated from the transcript.">
+  <meta name="theme-color" content="#08080d">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%23ff2d46'/><path d='M40 32l30 18-30 18z' fill='white'/></svg>">
+</head>
+<body>
+  <div class="bg" aria-hidden="true">
+    <span class="blob blob-1"></span>
+    <span class="blob blob-2"></span>
+    <span class="blob blob-3"></span>
+    <span class="grid"></span>
+  </div>
+
+  <header class="topbar">
+    <a class="brand" href="/">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
+      </span>
+      <span class="brand-name">Tube<span class="brand-accent">Forge</span></span>
+    </a>
+    <div class="status" id="apiStatus" title="Groq API status">
+      <span class="dot"></span><span class="status-text">checking…</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <p class="eyebrow">transcript &rarr; title &middot; description &middot; tags</p>
+      <h1>Paste a link. Get <span class="grad">upload-ready SEO</span> in seconds.</h1>
+      <p class="sub">Drop any YouTube video or Short. We read the transcript, then write a fresh title, description and tag set you can paste straight into YouTube Studio.</p>
+    </section>
+
+    <form id="genForm" class="panel form-panel" autocomplete="off">
+      <div class="input-row">
+        <span class="input-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11.5 4.5"/><path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L12.5 19.5"/></svg>
+        </span>
+        <input id="urlInput" name="url" type="text" inputmode="url"
+               placeholder="https://www.youtube.com/watch?v=..." aria-label="YouTube link" required>
+        <button type="button" class="ghost-btn" id="clearBtn" aria-label="Clear">Clear</button>
+      </div>
+
+      <div class="form-actions">
+        <label class="field">
+          <span>Variations</span>
+          <select id="varCount" aria-label="Number of variations">
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </label>
+        <button type="submit" class="primary-btn" id="genBtn">
+          <span class="btn-label">Generate metadata</span>
+          <span class="btn-loader" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div class="examples">
+        <span>Try:</span>
+        <button type="button" class="example-chip" data-url="https://www.youtube.com/watch?v=aqz-KE-bpKQ">Big Buck Bunny</button>
+        <button type="button" class="example-chip" data-url="https://youtu.be/jNQXAC9IVRw">Me at the zoo</button>
+        <button type="button" class="example-chip" data-url="https://www.youtube.com/shorts/aqz-KE-bpKQ">Shorts link</button>
+      </div>
+    </form>
+
+    <section id="loader" class="panel loader hidden" aria-live="polite">
+      <div class="loader-head">
+        <div class="spinner"></div>
+        <p class="loader-title" id="loaderTitle">Working on it…</p>
+      </div>
+      <ol class="steps" id="steps">
+        <li data-step="0"><span class="tick"></span>Reading the transcript</li>
+        <li data-step="1"><span class="tick"></span>Analysing the content</li>
+        <li data-step="2"><span class="tick"></span>Writing titles, description &amp; tags</li>
+      </ol>
+      <div class="bar"><i id="bar"></i></div>
+    </section>
+
+    <section id="errorBox" class="panel error-panel hidden" role="alert">
+      <span class="error-icon">!</span>
+      <div>
+        <strong>Something went wrong</strong>
+        <p id="errorMessage"></p>
+      </div>
+      <button type="button" class="ghost-btn" id="dismissError">Dismiss</button>
+    </section>
+
+    <section id="results" class="results hidden">
+      <div class="results-head">
+        <div class="pills">
+          <span class="pill" id="langPill">language</span>
+          <span class="pill" id="modelPill">model</span>
+          <span class="pill pill-soft" id="countPill">0 variations</span>
+        </div>
+        <div class="head-actions">
+          <button type="button" class="ghost-btn" id="copyAllBtn">Copy all</button>
+          <button type="button" class="ghost-btn" id="downloadBtn">Download .txt</button>
+        </div>
+      </div>
+
+      <div class="tabs" id="tabs" role="tablist" aria-label="Variations"></div>
+      <div id="panels" class="panels"></div>
+
+      <details class="panel transcript-panel">
+        <summary>
+          <span class="summary-label">Original transcript</span>
+          <span class="summary-meta" id="transcriptMeta"></span>
+        </summary>
+        <div class="transcript-body" id="transcriptBody"></div>
+        <div class="transcript-actions">
+          <button type="button" class="ghost-btn" id="copyTranscriptBtn">Copy transcript</button>
+        </div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Built with FastAPI + Groq. Transcript courtesy of YouTube captions.</p>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite">Copied</div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
