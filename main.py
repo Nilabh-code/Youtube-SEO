@@ -10,7 +10,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from groq_service import GroqError, generate_metadata, get_config
-from youtube_service import TranscriptError, extract_video_id, fetch_transcript
+from youtube_service import (
+    TranscriptError,
+    extract_track_urls,
+    extract_video_id,
+    fetch_transcript,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -27,6 +32,10 @@ class GenerateFromTextRequest(BaseModel):
     transcript: str = Field(..., min_length=50, max_length=120000)
     url: str = Field(default="", max_length=400)
     variations: int = Field(default=3, ge=1, le=5)
+
+
+class TracksRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=400)
 
 
 def _error(status_code: int, message: str, kind: str = "error") -> JSONResponse:
@@ -91,6 +100,67 @@ def generate(request: GenerateRequest):
         "variations": metadata["variations"],
         "model": _config_or_none()[1],
     }
+
+
+@app.post("/api/tracks")
+def tracks(request: TracksRequest):
+    """Return caption track URLs without downloading them.
+
+    The browser fallback: the server (blocked IP) extracts the URLs, the
+    visitor's browser (home IP) downloads the captions (YouTube allows the
+    cross-origin download), then posts the text to /api/generate-from-text.
+    """
+    video_id = extract_video_id(request.url)
+    if not video_id:
+        return _error(400, "That is not a valid YouTube link.")
+
+    try:
+        track_list = extract_track_urls(video_id)
+    except TranscriptError as exc:
+        return _error(422, str(exc), kind=exc.kind)
+    except Exception:
+        return _error(500, "Something went wrong while reading the video page.")
+
+    return {"video_id": video_id, "tracks": track_list}
+
+
+@app.get("/api/debug-transcript")
+def debug_transcript(url: str = ""):
+    """Step by step transcript diagnostics (no transcript text returned)."""
+    video_id = extract_video_id(url)
+    if not video_id:
+        return {"video_id": None, "error": "invalid url"}
+
+    from youtube_service import _from_library, _from_supadata, _from_watch_page
+
+    steps = {}
+    for name, func in (
+        ("library", _from_library),
+        ("supadata", _from_supadata),
+        ("watch_page", _from_watch_page),
+    ):
+        try:
+            transcript = func(video_id)
+            steps[name] = {
+                "ok": True,
+                "source": transcript.source,
+                "language": transcript.language,
+                "chars": len(transcript.text),
+            }
+            break
+        except TranscriptError as exc:
+            steps[name] = {"ok": False, "kind": exc.kind, "message": str(exc)[:200]}
+        except Exception as exc:
+            steps[name] = {"ok": False, "kind": "exception", "message": type(exc).__name__}
+
+    try:
+        track_list = extract_track_urls(video_id)
+        steps["track_urls"] = {"ok": True, "count": len(track_list)}
+    except TranscriptError as exc:
+        steps["track_urls"] = {"ok": False, "kind": exc.kind, "message": str(exc)[:200]}
+    except Exception as exc:
+        steps["track_urls"] = {"ok": False, "kind": "exception", "message": type(exc).__name__}
+    return {"video_id": video_id, "steps": steps}
 
 
 @app.post("/api/generate-from-text")

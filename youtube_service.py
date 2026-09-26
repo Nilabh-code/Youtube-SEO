@@ -353,6 +353,46 @@ def _supadata_transcript(payload: dict) -> Transcript:
     return Transcript(text, str(payload.get("lang") or "unknown"), "supadata")
 
 
+def extract_track_urls(video_id: str) -> list[dict]:
+    """Fetch the watch page and return caption track URLs without downloading them.
+
+    Used by the browser fallback: the server (blocked IP) extracts the URLs,
+    the visitor's browser (home IP) downloads the captions. Track URLs are not
+    IP bound, so this works across machines.
+    """
+    last_error: TranscriptError | None = None
+    for user_agent in (DESKTOP_UA, MOBILE_UA):
+        try:
+            tracks = _fetch_watch_tracks(video_id, user_agent)
+        except TranscriptError as exc:
+            last_error = exc
+            continue
+        if tracks:
+            return [
+                {
+                    "languageCode": track.get("languageCode", "unknown"),
+                    "label": _track_label(track),
+                    "is_generated": track.get("kind") == "asr",
+                    "url": track.get("baseUrl", "").replace("&fmt=srv3", ""),
+                }
+                for track in tracks
+                if track.get("baseUrl")
+            ]
+        last_error = TranscriptError(
+            "This video has no captions available.", "no_captions"
+        )
+    raise last_error or TranscriptError(
+        "Could not read the video page from YouTube.", "blocked"
+    )
+
+
+def _track_label(track: dict) -> str:
+    try:
+        return track.get("name", {}).get("runs", [{}])[0].get("text", "")
+    except (AttributeError, IndexError, KeyError):
+        return ""
+
+
 def _from_watch_page(video_id: str) -> Transcript:
     """Fallback: scrape captionTracks from the watch page (helps when the API is throttled)."""
     last_error: TranscriptError | None = None
@@ -360,24 +400,29 @@ def _from_watch_page(video_id: str) -> Transcript:
     for attempt in range(WATCH_RETRIES):
         user_agent = DESKTOP_UA if attempt % 2 == 0 else MOBILE_UA
         try:
-            transcript = _scrape_watch_page(video_id, user_agent)
+            tracks = _fetch_watch_tracks(video_id, user_agent)
         except TranscriptError as exc:
             last_error = exc
             time.sleep(1.2 * (attempt + 1))
             continue
-        if transcript and transcript.text.strip():
-            return transcript
-        last_error = TranscriptError(
-            "The transcript for this video came back empty.", "no_captions"
-        )
-        time.sleep(1.2 * (attempt + 1))
+        if not tracks:
+            last_error = TranscriptError(
+                "This video has no captions available.", "no_captions"
+            )
+            break
+        try:
+            return _download_track(tracks, user_agent)
+        except TranscriptError as exc:
+            last_error = exc
+            time.sleep(1.2 * (attempt + 1))
+            continue
 
     raise last_error or TranscriptError(
         "Could not read the transcript from YouTube.", "blocked"
     )
 
 
-def _scrape_watch_page(video_id: str, user_agent: str) -> Transcript:
+def _fetch_watch_tracks(video_id: str, user_agent: str) -> list:
     headers = {"User-Agent": user_agent, "Accept-Language": "en-US,en;q=0.9"}
     try:
         response = requests.get(
@@ -432,7 +477,11 @@ def _scrape_watch_page(video_id: str, user_agent: str) -> Transcript:
         ) from exc
     if not tracks:
         raise TranscriptError("This video has no captions available.", "no_captions")
+    return tracks
 
+
+def _download_track(tracks: list, user_agent: str) -> Transcript:
+    headers = {"User-Agent": user_agent, "Accept-Language": "en-US,en;q=0.9"}
     track = _pick_track(tracks)
     base_url = track.get("baseUrl")
     if not base_url:

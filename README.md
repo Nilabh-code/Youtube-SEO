@@ -11,7 +11,10 @@ Built with **FastAPI + vanilla HTML/CSS/JS**, deployed on **Render**.
 
 - Works with `youtube.com/watch`, `youtu.be`, `/shorts/`, `/embed/`, `/live/` and raw video IDs
 - Transcript auto-detect (English first, then whatever captions exist) with a watch-page fallback
-- Optional free Supadata key: server fetches transcripts itself on hosts YouTube blocks, keeping the site paste-URL-only
+- Automatic browser fallback: if the server IP is blocked, the site pulls caption
+  URLs from the server and downloads the captions from the visitor's own browser
+  (home IPs are not blocked) — still paste-URL-only, no action needed
+- Optional free Supadata key: server fetches transcripts itself on hosts YouTube blocks
 - Built-in manual transcript paste: if YouTube blocks the server IP, the site guides you to paste the transcript and still generates everything
 - Optional `TRANSCRIPT_PROXY` env var for hosts whose IP YouTube blocks
 - 2–5 metadata variations, each from a different angle (SEO / curiosity / community)
@@ -144,6 +147,27 @@ Errors from `/api/generate` include a machine readable `kind`:
 | `blocked` | YouTube blocked this server's IP — retry later or paste manually |
 | `no_captions` | the video has no captions |
 | `unavailable` | private / deleted / region locked / age restricted / bad id |
+
+### `POST /api/tracks`
+
+Returns caption track URLs without downloading them (powers the automatic
+browser fallback):
+
+```json
+{ "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ" }
+```
+
+```json
+{
+  "video_id": "aqz-KE-bpKQ",
+  "tracks": [{ "languageCode": "en", "label": "English", "is_generated": false, "url": "https://..." }]
+}
+```
+
+### `GET /api/debug-transcript?url=...`
+
+Step-by-step transcript diagnostics (which source worked/failed and why).
+Handy when the deployed server behaves differently from your laptop.
 
 ### `GET /api/health`
 

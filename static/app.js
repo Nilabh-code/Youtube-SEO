@@ -65,7 +65,10 @@ form.addEventListener("submit", async (event) => {
     finishGenerate(data);
   } catch (err) {
     stopLoader();
-    if (err.kind === "blocked" || err.kind === "fetch_failed" || err.kind === "no_captions") {
+    if (err.kind === "blocked" || err.kind === "fetch_failed") {
+      // Server IP is blocked: download the captions from THIS browser instead.
+      await tryBrowserFetch(url);
+    } else if (err.kind === "no_captions") {
       showManual(err, url);
     } else {
       showError(err.message || "Unexpected error. Try again.");
@@ -74,6 +77,65 @@ form.addEventListener("submit", async (event) => {
     setBusy(false);
   }
 });
+
+async function tryBrowserFetch(url) {
+  hide(errorBox);
+  hide(manualPanel);
+  setBusy(true);
+  startLoader();
+
+  try {
+    const data = await requestGenerate("/api/tracks", { url });
+    const track = pickTrack(data.tracks);
+    if (!track) {
+      throw Object.assign(new Error("No downloadable captions found for this video."), {
+        kind: "no_captions",
+      });
+    }
+    const response = await fetch(track.url);
+    if (!response.ok) {
+      throw Object.assign(new Error("Your browser could not download the captions."), {
+        kind: "browser_failed",
+      });
+    }
+    const transcript = parseTimedtextXml(await response.text());
+    if (transcript.length < 50) {
+      throw Object.assign(new Error("The downloaded captions came back empty."), {
+        kind: "browser_failed",
+      });
+    }
+    const result = await requestGenerate("/api/generate-from-text", {
+      transcript,
+      url,
+      variations: Number(varCount.value),
+    });
+    finishGenerate(result);
+  } catch (err) {
+    stopLoader();
+    showManual(err.kind ? err : Object.assign(new Error(String((err && err.message) || err)), { kind: "browser_failed" }), url);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function pickTrack(tracks) {
+  if (!Array.isArray(tracks) || tracks.length === 0) return null;
+  const english = tracks.find((track) =>
+    String(track.languageCode || "").toLowerCase().startsWith("en")
+  );
+  return english || tracks[0];
+}
+
+function parseTimedtextXml(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+  const nodes = doc.getElementsByTagName("text");
+  const parts = [];
+  for (const node of nodes) {
+    const text = (node.textContent || "").trim();
+    if (text) parts.push(text);
+  }
+  return parts.join(" ").replace(/[ \t]+/g, " ").trim();
+}
 
 async function requestGenerate(endpoint, payload) {
   const res = await fetch(endpoint, {
